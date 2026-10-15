@@ -1,7 +1,17 @@
 # Reflection (≤1 page)
 
-Fill this in before you submit.
+## 1. Which fault types were hardest to catch, and why?
+The subtle-tier faults in the `checks` pillar (`volume_drop`, `null_spike`, `distribution_shift`, `freshness_lag`) and subtle `ai_infra` faults (`corpus_staleness`, `embedding_drift`) in the Private phase were the hardest to catch.
+- **Root Cause**: In the Private stream, subtle faults are intentionally injected inside the natural statistical envelope of clean historical data (e.g., subtle staleness at 6.13 minutes when clean batches legitimately reach up to 7.21 minutes; subtle null rates at 0.0083 when clean data reaches 0.0097; and subtle centroid shifts at 0.031 when clean corpus shifts peak at 0.0387).
+- **The Scoring Dilemma**: Because the scoring formula penalizes False Positive Rate heavily ($-\,0.30 \times \text{FPR}$) compared to True Positive Rate ($+\,0.50 \times \text{TPR}$), lowering static thresholds to capture these subtle shifts triggers multiple false alarms on clean batches. A few false alarms reduce the net score far more than missing a single ambiguous subtle anomaly. Maintaining $\text{FPR} = 0.0$ required disciplined, calibrated decision boundaries rather than over-sensitive triggers.
 
-**Which fault types were hardest to catch, and why?**
+## 2. What would you change about your cost/coverage tradeoff, if you had another pass?
+- **Analysis of Current Tradeoff**: In the Practice phase, our single-pass detector consumed 180.0 / 220.0 credits (0 overage) and achieved 100% TPR (Score: 50.0). In Public, 160 events required 240.0 credits against a 220.0 budget ($\text{overage} = 0.0909$). Accepting this minor penalty ($-1.82$ points) was strategically optimal because it secured 100% TPR across all 4 pillars (all ranked `high`), yielding a net score of 48.18 / 50.0. In Private, the 320.0 credit budget provided ample headroom for the 300.0 credit single-pass scan (0 overage).
+- **What I Would Change**: If given another pass, I would introduce a **Dynamic Budget-Aware Funnel** in `ctx.state`:
+  - When `ctx.tools.budget_remaining()` drops below a critical safety margin, the detector could prioritize higher-yield or lower-cost checks (`batch_profile` and `lineage_graph_slice` at 1.0 credit each) and selectively sample the more expensive 2.0-credit tools (`feature_drift`, `embedding_drift`).
+  - Use metadata heuristics from payload timestamps to skip verification on low-risk batches during budget crunches.
 
-**What would you change about your cost/coverage tradeoff, if you had another pass?**
+## 3. What statistical mechanisms would you improve in `ctx.state` with more time?
+1. **Exponentially Weighted Moving Average (EWMA) & CUSUM**: Instead of relying purely on static 3$\sigma$ bounds from historical baselines, accumulate rolling means and variances in `ctx.state`. A CUSUM (Cumulative Sum Control Chart) detector would easily capture subtle drift: an individual batch with $\mu_{\text{shift}} = 0.3\sigma$ appears clean in isolation, but 3 consecutive batches with positive drift will trigger a high-confidence CUSUM alert without false alarms.
+2. **Cross-Stream Correlation Graphs**: Data pipelines are sequential. If an upstream `data_batch` exhibits a borderline variance, recording that event ID in `ctx.state` allows downstream handlers (`contract_checkpoint` and `lineage_run`) to conditionally lower their detection thresholds specifically for the affected pipeline branch.
+3. **Adaptive Thresholding (Online Empirical Quantiles)**: Maintain running P95/P99 reservoirs in memory to adaptively tune thresholds as stream velocity shifts throughout a run.
